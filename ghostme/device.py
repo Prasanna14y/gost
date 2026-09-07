@@ -1,9 +1,25 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+
+def _run(coro_or_value):
+    if inspect.isawaitable(coro_or_value):
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                return pool.submit(asyncio.run, coro_or_value).result()
+        return asyncio.run(coro_or_value)
+    return coro_or_value
 
 
 @dataclass
@@ -20,9 +36,10 @@ def list_devices() -> list[DeviceInfo]:
         from pymobiledevice3.lockdown import create_using_usbmux
 
         devices = []
-        for mux_device in usbmux_list():
+        mux_devices = _run(usbmux_list())
+        for mux_device in mux_devices:
             try:
-                lockdown = create_using_usbmux(serial=mux_device.serial)
+                lockdown = _run(create_using_usbmux(serial=mux_device.serial))
                 info = DeviceInfo(
                     udid=lockdown.udid,
                     name=lockdown.display_name,
@@ -46,12 +63,12 @@ def _get_lockdown(udid: str | None = None):
     from pymobiledevice3.lockdown import create_using_usbmux
 
     if udid:
-        return create_using_usbmux(serial=udid)
+        return _run(create_using_usbmux(serial=udid))
 
-    mux_devices = usbmux_list()
+    mux_devices = _run(usbmux_list())
     if not mux_devices:
         raise ConnectionError("No iOS device connected. Please connect your iPhone via USB.")
-    return create_using_usbmux(serial=mux_devices[0].serial)
+    return _run(create_using_usbmux(serial=mux_devices[0].serial))
 
 
 def set_location(lat: float, lon: float, udid: str | None = None) -> dict:
@@ -61,7 +78,7 @@ def set_location(lat: float, lon: float, udid: str | None = None) -> dict:
         try:
             from pymobiledevice3.services.simulate_location import DtSimulateLocation
             service = DtSimulateLocation(lockdown)
-            service.set(lat, lon)
+            _run(service.set(lat, lon))
         except ImportError:
             from pymobiledevice3.services.dvt.instruments.location_simulation import LocationSimulation
             from pymobiledevice3.services.dvt.dvt_secure_socket_proxy import DvtSecureSocketProxyService
@@ -88,7 +105,7 @@ def reset_location(udid: str | None = None) -> dict:
         try:
             from pymobiledevice3.services.simulate_location import DtSimulateLocation
             service = DtSimulateLocation(lockdown)
-            service.clear()
+            _run(service.clear())
         except ImportError:
             from pymobiledevice3.services.dvt.instruments.location_simulation import LocationSimulation
             from pymobiledevice3.services.dvt.dvt_secure_socket_proxy import DvtSecureSocketProxyService
